@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ideascraper
+      POSTGRES_PASSWORD: ideascraper
+      POSTGRES_DB: ideascraper
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ideascraper"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333"]
+    volumes: [qdrant:/qdrant/storage]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio:/data]
+
+  # ponytail: CRF-only image (~500MB) — enough for sections+coordinates; switch to
+  # grobid/grobid:0.8.2-full if deep-learning models are ever needed
+  grobid:
+    image: grobid/grobid:0.8.2
+    ports: ["8070:8070"]
+
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes:
+      - ~/.ollama:/root/.ollama  # reuse host-pulled models (qwen3:8b, bge-large)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    environment: &appenv
+      DATABASE_URL: postgresql+asyncpg://ideascraper:ideascraper@postgres:5432/ideascraper
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      MINIO_ENDPOINT: minio:9000
+      GROBID_URL: http://grobid:8070
+      # Ollama — override in .env to point at a different host/model (see .env.example)
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+      SUMMARY_MODEL: ${SUMMARY_MODEL:-qwen3:8b}
+      REASONING_MODEL: ${REASONING_MODEL:-qwen3:8b}
+      # cloud LLM keys — compose reads ./.env automatically (see .env.example)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  worker:
+    build: .
+    command: arq app.worker.WorkerSettings
+    environment: *appenv
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+volumes:
+  pgdata: {}
+  qdrant: {}
+  minio: {}
