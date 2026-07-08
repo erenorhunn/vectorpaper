@@ -1,9 +1,0 @@
-{
-  "_comment": "Golden set (doc §9): query → substring expected in a top-k retrieved chunk. Keep in sync with the ingested corpus — grow it as papers are added.",
-  "cases": [
-    {"query": "wearable haptic alerts for misinformation during conversation", "expect_substring": "misinformation"},
-    {"query": "patch level retrieval to augment image generation", "expect_substring": "patch"},
-    {"query": "reducing latency with on-device or edge inference", "expect_substring": "latency"},
-    {"query": "context aware cognitive augmentation with LLMs", "expect_substring": "cognitive"}
-  ]
-}
