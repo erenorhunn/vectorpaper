@@ -8,7 +8,7 @@ mobilde bottom barda active butonda hala border radius 0 değil
 
 AI query suggestions dialog'da suggest buton ile input bar height'ları aynı olsun
 
-Birden fazla arama yaptığımızda, tüm arama sonuçlarını göstermeliyiz. Ortak sonuçları önceliklendirebiliriz.
+Birden fazla arama yaptığımızda, tüm arama sonuçlarını göstermeliyiz. birden fazla text girmiş olmak arama sonuçlarını daraltmamalı. Ortak sonuçları önceliklendirebiliriz.
 
 pdf scroll yaparken daha hızlı scroll olsun.
 
