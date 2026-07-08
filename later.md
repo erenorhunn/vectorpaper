@@ -1,10 +1,10 @@
-create full eng better README both for simple users and developers. create workflows that build the app for windows, android and linux. let the users to add claude/gemini/ollama url/api token and else in the app main seettings (not in project settings) so we do not need .env. (still use .env if exist)
+l butocreate full eng better README both for simple users and developers. create workflows that build the app for windows, android and linux. let the users to add claude/gemini/ollama url/api token and else in the app main seettings (not in project settings) so we do not need .env. (still use .env if exist)
 
 library'e indirilen pdfler failed olabiliyor. bu durumda refreh buton koyalım failed olan pdflere. (delete butonunun soluna bir de bu silme butonunu kaldır zaten ayarlar bölümünden silinebiliyor) bu sayede istediğimiz pdf'leri tekrar deneyebiliriz.
 
 API'ler arasına researchgate de ekle
 
-library refresh butonunun yanına "+" butonu ekle. link ile direkt kendimiz pdf ekleyebilelim.
+library refresh butonunun yanına "+" butonu ekle. link ile ya da dosya yükleyerek direkt kendimiz pdf ekleyebilelim.
 
 yapılan aramalar, projede kayıtlı kalsın. tekrar girdiğimizde aynı aramarlı bulabilelim
 
