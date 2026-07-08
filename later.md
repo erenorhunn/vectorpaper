@@ -2,6 +2,10 @@ create full eng better README both for simple users and developers. create workf
 
 library'e indirilen pdfler failed olabiliyor. bu durumda refreh buton koyalım failed olan pdflere. (delete butonunun soluna bir de bu silme butonunu kaldır zaten ayarlar bölümünden silinebiliyor) bu sayede istediğimiz pdf'leri tekrar deneyebiliriz.
 
+API'ler arasına researchgate de ekle
+
+library refresh butonunun yanına "+" butonu ekle. link ile direkt kendimiz pdf ekleyebilelim.
+
 yapılan aramalar, projede kayıtlı kalsın. tekrar girdiğimizde aynı aramarlı bulabilelim
 
 mobilde bottom barda active butonda hala border radius 0 değil
