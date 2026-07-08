@@ -1,0 +1,31 @@
+[project]
+name = "idea-scraper"
+version = "0.1.0"
+description = "Academic research & agentic RAG pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy[asyncio]>=2",
+    "asyncpg",
+    "pydantic-settings",
+    "arq",
+    "httpx",
+    "minio",
+    "qdrant-client",
+    "openai",
+    "flashrank",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
