@@ -1,1 +1,0 @@
-create full eng better README both for simple users and developers. create workflows that build the app for windows, android and linux. let the users to add claude/gemini/ollama url/api token and else in the app main seettings (not in project settings) so we do not need .env. (still use .env if exist)
