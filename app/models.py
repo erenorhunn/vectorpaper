@@ -107,6 +107,19 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ChatMessage(Base):
+    """Persistent library-settings chat. `paper_ids` holds the @-tagged papers on a user turn."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    paper_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class LlmCall(Base):
     # ponytail: cost/latency ledger in Postgres; add Langfuse when a dashboard is needed
     __tablename__ = "llm_calls"

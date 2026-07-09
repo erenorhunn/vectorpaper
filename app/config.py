@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
+    openalex_mailto: str = ""  # optional email for OpenAlex's faster "polite pool"
     search_max_results: int = 10
     prefilter_min_year: int = 0
     prefilter_min_citations: int = 0

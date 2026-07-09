@@ -1,11 +1,12 @@
-"""Adım 1 — discovery & download. API-first: arXiv (primary) + Semantic Scholar (citations/TLDR).
+"""Adım 1 — discovery & download. API-first: arXiv (primary) + Semantic Scholar + OpenAlex.
 
-ponytail: no CrossRef/Scholar fallback yet — arXiv+S2 covers open access; add when paywalled
-sources actually matter.
+ponytail: ResearchGate has no public API (Cloudflare-blocked) — OpenAlex covers the same
+broad, non-arXiv literature with a real free API instead.
 """
 
 import asyncio
 import hashlib
+import re
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -15,8 +16,10 @@ from .config import settings
 ARXIV_API = "https://export.arxiv.org/api/query"
 S2_BATCH = "https://api.semanticscholar.org/graph/v1/paper/batch"
 S2_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search"
+OPENALEX_SEARCH = "https://api.openalex.org/works"
 ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
+_ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([\w.]+?)(?:v\d+)?(?:\.pdf)?$")
 
 # arXiv asks for >=3s between requests
 ARXIV_DELAY = 3.0
@@ -95,18 +98,85 @@ async def search_s2(keywords: str, max_results: int = 10, offset: int = 0) -> li
     return entries
 
 
+def _openalex_abstract(inv: dict | None) -> str | None:
+    """OpenAlex ships abstracts as an inverted index {word: [positions]} — rebuild the text."""
+    if not inv:
+        return None
+    words = sorted((pos, w) for w, positions in inv.items() for pos in positions)
+    return " ".join(w for _, w in words) or None
+
+
+async def search_openalex(keywords: str, max_results: int = 10, page: int = 0) -> list[dict]:
+    """Third discovery source: OpenAlex full-text search, open-access downloadables only.
+
+    Free, no key. Failure is non-fatal (returns []). ResearchGate replacement.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            r = await http.get(
+                OPENALEX_SEARCH,
+                params={
+                    "search": keywords,
+                    "per-page": max_results,
+                    "page": page + 1,  # OpenAlex pages are 1-based
+                    "mailto": settings.openalex_mailto or None,  # polite pool
+                    "select": "title,abstract_inverted_index,authorships,publication_year,"
+                              "doi,cited_by_count,best_oa_location,primary_location,ids",
+                },
+            )
+            r.raise_for_status()
+    except Exception:
+        return []  # ponytail: best-effort third source
+
+    entries = []
+    for d in r.json().get("results") or []:
+        loc = d.get("best_oa_location") or d.get("primary_location") or {}
+        pdf = loc.get("pdf_url")
+        landing = loc.get("landing_page_url") or ""
+        m = _ARXIV_URL_RE.search(pdf or "") or _ARXIV_URL_RE.search(landing)
+        arxiv_id = m.group(1) if m else None
+        if not (pdf or arxiv_id):
+            continue  # only list what we can actually download
+        doi = (d.get("doi") or "").removeprefix("https://doi.org/") or None
+        entries.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": d.get("title") or "",
+                "abstract": _openalex_abstract(d.get("abstract_inverted_index")),
+                "authors": [(a.get("author") or {}).get("display_name", "")
+                            for a in d.get("authorships") or []],
+                "year": d.get("publication_year"),
+                "doi": doi,
+                "venue": (loc.get("source") or {}).get("display_name"),
+                "citation_count": d.get("cited_by_count") or 0,
+                "source": "openalex",
+                "pdf_url": pdf,
+            }
+        )
+    return entries
+
+
+def _candidate_key(e: dict) -> str:
+    return (e.get("arxiv_id") or "").split("v")[0] or " ".join(e["title"].lower().split())
+
+
 def merge_candidates(*result_lists: list[dict]) -> list[dict]:
-    """Merge multi-source/multi-query results, dedup by arxiv_id then normalized title."""
-    seen: set[str] = set()
-    merged = []
+    """Merge multi-source/multi-query results, dedup by arxiv_id then normalized title.
+
+    A paper found by several queries/sources ranks ahead of one found by a single query —
+    overlap is a relevance signal, not a reason to drop results.
+    """
+    merged: dict[str, dict] = {}
+    hits: dict[str, int] = {}
     for entries in result_lists:
         for e in entries:
-            key = (e.get("arxiv_id") or "").split("v")[0] or " ".join(e["title"].lower().split())
-            if not key or key in seen:
+            key = _candidate_key(e)
+            if not key:
                 continue
-            seen.add(key)
-            merged.append(e)
-    return merged
+            hits[key] = hits.get(key, 0) + 1
+            merged.setdefault(key, e)
+    # stable sort keeps discovery order within an equal-overlap tier
+    return sorted(merged.values(), key=lambda e: -hits[_candidate_key(e)])
 
 
 async def enrich_s2(entries: list[dict]) -> None:

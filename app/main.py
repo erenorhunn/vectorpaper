@@ -3,16 +3,17 @@ from contextlib import asynccontextmanager
 
 import httpx
 from arq.connections import RedisSettings, create_pool
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select, text
 
 from . import analyze as analysis
+from . import chat as chatmod
 from . import db, ingest, rerank, storage, summarize, vectors
 from .config import settings
-from .models import Chunk, Feedback, Job, Paper, PaperStatus, Project, Summary
+from .models import ChatMessage, Chunk, Feedback, Job, Paper, PaperStatus, Project, Summary
 
 
 @asynccontextmanager
@@ -186,7 +187,7 @@ async def search_help(project_id: str, req: HelpRequest):
 
 # ---- Adım 1b: discovery (candidates only — nothing is downloaded yet) ---------------------
 
-DISCOVER_PAGE = 20  # total new candidates per page, split across arXiv + S2
+DISCOVER_PAGE = 20  # candidates per query per page, split across arXiv + S2 + OpenAlex
 
 
 class DiscoverRequest(BaseModel):
@@ -204,12 +205,13 @@ async def discover(project_id: str, req: DiscoverRequest):
     async with db.Session() as s:
         await _project(s, project_id)
 
-    per_query = max(1, DISCOVER_PAGE // 2 // len(queries))
-    arxiv_lists, s2_lists = [], []
+    per_query = max(1, DISCOVER_PAGE // 3)  # each query gets a full share; more queries → more results, not fewer
+    arxiv_lists, s2_lists, oa_lists = [], [], []
     for q in queries:
         arxiv_lists.append(await ingest.search_arxiv(q, per_query, start=req.page * per_query))
         s2_lists.append(await ingest.search_s2(q, per_query, offset=req.page * per_query))
-    candidates = ingest.merge_candidates(*arxiv_lists, *s2_lists)
+        oa_lists.append(await ingest.search_openalex(q, per_query, page=req.page))
+    candidates = ingest.merge_candidates(*arxiv_lists, *s2_lists, *oa_lists)
     await ingest.enrich_s2(candidates)
     if req.year_min:
         candidates = [c for c in candidates if (c.get("year") or 0) >= req.year_min]
@@ -258,6 +260,58 @@ async def start_ingest(project_id: str, req: IngestRequest):
         job_id = job.id
     await app.state.arq.enqueue_job("run_ingest", job_id)
     return {"job_id": job_id}
+
+
+import hashlib
+import re
+
+
+async def _enqueue_one(project_id: str, paper: Paper) -> str:
+    """Persist a manually-added paper + its ingest job, mirror of start_ingest."""
+    async with db.Session() as s:
+        await _project(s, project_id)
+        s.add(paper)
+        await s.flush()
+        job = Job(kind="ingest", payload={"paper_ids": [paper.id], "project_id": project_id})
+        s.add(job)
+        await s.commit()
+        job_id, paper_id = job.id, paper.id
+    await app.state.arq.enqueue_job("run_ingest", job_id)
+    return job_id
+
+
+@app.post("/projects/{project_id}/add")
+async def add_paper(project_id: str, link: str = Form(None), file: UploadFile = File(None)):
+    """Manual add: a PDF/arXiv link, or an uploaded PDF file. Title is refined by GROBID later."""
+    if file is not None:
+        data = await file.read()
+        if not data.startswith(b"%PDF"):
+            raise HTTPException(422, "uploaded file is not a PDF")
+        paper = Paper(project_id=project_id, title=file.filename or "Uploaded PDF",
+                      source="upload", status=PaperStatus.downloaded,
+                      content_hash=hashlib.sha256(data).hexdigest())
+        async with db.Session() as s:  # need the id before we can key storage
+            s.add(paper)
+            await s.flush()
+            paper.storage_key = f"{paper.id}.pdf"
+            storage.put_pdf(paper.storage_key, data)
+            job = Job(kind="ingest", payload={"paper_ids": [paper.id], "project_id": project_id})
+            s.add(job)
+            await s.commit()
+            job_id = job.id
+        await app.state.arq.enqueue_job("run_ingest", job_id)
+        return {"job_id": job_id}
+
+    if link:
+        link = link.strip()
+        m = re.search(r"arxiv\.org/(?:abs|pdf)/([\w.\-/]+?)(?:v\d+)?(?:\.pdf)?/?$", link)
+        arxiv_id = m.group(1) if m else None
+        paper = Paper(project_id=project_id, title=link.rstrip("/").rsplit("/", 1)[-1],
+                      arxiv_id=arxiv_id, pdf_url=None if arxiv_id else link,
+                      source="arxiv" if arxiv_id else "link", status=PaperStatus.queued)
+        return {"job_id": await _enqueue_one(project_id, paper)}
+
+    raise HTTPException(422, "provide a link or a file")
 
 
 def _paper_dict(p: Paper) -> dict:
@@ -405,6 +459,8 @@ async def get_summary(paper_id: str, refresh: bool = False):
         return await summarize.summarize_paper(paper_id)
     except ValueError:
         raise HTTPException(404)
+    except Exception as e:  # LLM/upstream down → legible 502, not raw 500
+        raise HTTPException(502, f"summary failed: {e}")
 
 
 # ---- Adım 5: deep analysis ---------------------------------------------------------------
@@ -435,6 +491,59 @@ async def stream_analysis(job_id: str):
         try:
             async for token in analysis.deep_analysis(params["paper_id"], params["topic"]):
                 yield f"data: {json.dumps(token)}\n\n"  # JSON keeps newlines SSE-safe
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {e}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream")
+
+
+# ---- Library-settings chat ---------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    content: str
+    paper_ids: list[str] = []
+
+
+@app.get("/projects/{project_id}/chat")
+async def get_chat(project_id: str):
+    async with db.Session() as s:
+        rows = (await s.execute(
+            select(ChatMessage).where(ChatMessage.project_id == project_id)
+            .order_by(ChatMessage.created_at)
+        )).scalars().all()
+    return {"messages": [{"role": m.role, "content": m.content, "paper_ids": m.paper_ids}
+                         for m in rows]}
+
+
+@app.delete("/projects/{project_id}/chat")
+async def clear_chat(project_id: str):
+    async with db.Session() as s:
+        await s.execute(delete(ChatMessage).where(ChatMessage.project_id == project_id))
+        await s.commit()
+    return {"ok": True}
+
+
+@app.post("/projects/{project_id}/chat")
+async def post_chat(project_id: str, req: ChatRequest):
+    async with db.Session() as s:
+        s.add(ChatMessage(project_id=project_id, role="user", content=req.content,
+                          paper_ids=req.paper_ids))
+        await s.commit()
+        history = [{"role": m.role, "content": m.content} for m in (await s.execute(
+            select(ChatMessage).where(ChatMessage.project_id == project_id)
+            .order_by(ChatMessage.created_at)
+        )).scalars().all()]
+
+    async def sse():
+        acc = ""
+        try:
+            async for token in chatmod.answer(project_id, history, req.paper_ids):
+                acc += token
+                yield f"data: {json.dumps(token)}\n\n"
+            async with db.Session() as s:
+                s.add(ChatMessage(project_id=project_id, role="assistant", content=acc))
+                await s.commit()
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: [ERROR] {e}\n\n"

@@ -5,6 +5,7 @@ description = "Academic research & agentic RAG pipeline"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi",
+    "python-multipart",  # Form/File routes (paper upload) need it on modern FastAPI
     "uvicorn[standard]",
     "sqlalchemy[asyncio]>=2",
     "asyncpg",
