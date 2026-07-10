@@ -123,6 +123,45 @@ What about this one?"""
     assert all("?" not in q for q in qs)
 
 
+# ---- Ideas wizard: tolerant JSON extraction (offline) -------------------------------------
+
+def test_extract_json():
+    import json
+
+    from app.llm import extract_json
+
+    assert extract_json('```json\n{"a": 1}\n```') == '{"a": 1}'
+    lifted = extract_json('Sure! {"a": [1, 2], "b": "x[y] {z}"} hope that helps')
+    assert json.loads(lifted) == {"a": [1, 2], "b": "x[y] {z}"}
+    assert extract_json('preamble [{"t": "A"}, {"t": "B"}] trailing') == '[{"t": "A"}, {"t": "B"}]'
+    assert extract_json("no json here") is None
+    assert extract_json('{"unclosed": 1') is None
+
+
+def test_resolve_grounding():
+    from app.ideate import _resolve_grounding
+
+    by_title = {"attention is all you need": "id-1", "bert": "id-2",
+                "factually: wearable fact-checking": "id-3"}
+    out = _resolve_grounding(["Attention Is All You Need", " BERT ", "Made Up Paper",
+                              "attention is all you need", None, "Factually"], by_title)
+    assert out == [{"paper_id": "id-1", "title": "Attention Is All You Need"},
+                   {"paper_id": "id-2", "title": "BERT"},
+                   {"paper_id": None, "title": "Made Up Paper"},  # unknown kept title-only
+                   {"paper_id": "id-3", "title": "Factually"}]   # abbreviated → unique substring
+
+
+def test_valid_ideas_filter():
+    from app.ideate import _valid_ideas
+
+    items = [{"title": "A", "research_question": "Q?"},
+             {"title": "", "research_question": "Q?"},   # empty title
+             {"title": "B"},                              # missing RQ
+             "not a dict"]
+    assert [i["title"] for i in _valid_ideas(items)] == ["A"]
+    assert _valid_ideas({"title": "not a list"}) == []
+
+
 # ---- Faz 1: live arXiv ingestion (needs network) ------------------------------------------
 
 @pytest.mark.anyio

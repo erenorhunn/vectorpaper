@@ -3,8 +3,8 @@
 Academic research assistant with project workspaces: AI-assisted query suggestions →
 arXiv + Semantic Scholar discovery → user selects candidates → PDF download → GROBID
 structural parsing (LLM-free abstract/conclusion extract) → parent-child chunks → Qdrant
-vectors → grounded LLM summary matrix → relevance feedback → deep-analysis blueprints.
-Design doc: [doc.md](doc.md).
+vectors → grounded LLM summary matrix → relevance feedback → deep-analysis blueprints →
+Ideas wizard (gap analysis → grounded article ideas → streamed proposal blueprints).
 
 ## Run
 
@@ -35,7 +35,12 @@ localhost ports, container overrides live in `docker-compose.yml`.
    conclusion appear immediately in the detail view's Çıkarım tab (no LLM involved).
 4. **Kütüphane** — semantic search, like/dislike (feeds reranking), dual-pane detail
    (PDF + sections / grounded summary / deep analysis).
-5. **Ayarlar** — light/dark theme, LLM provider per project, export PDFs, delete
+5. **Ideas** — step-by-step wizard: enter a topic (with a library-coverage check) → a
+   background job reads the most relevant papers (biased to their future-work sections),
+   argues the research gaps, and proposes 5-8 structured article ideas grounded in your
+   library → like/dislike and free-text guidance steer the next round → "Develop" streams
+   a full proposal blueprint (positioning / contributions / method / experiments / risks).
+6. **Ayarlar** — light/dark theme, LLM provider per project, export PDFs, delete
    papers/content/project.
 
 ## API (same flow via curl)
@@ -57,6 +62,12 @@ curl -X POST localhost:8000/papers/<paper_id>/feedback -H 'content-type: applica
   -d '{"signal": "like"}'
 curl -X POST localhost:8000/analyze -H 'content-type: application/json' \
   -d '{"paper_id": "...", "topic": "..."}'               # then GET the stream_url (SSE)
+curl -X POST localhost:8000/projects/<pid>/ideate -H 'content-type: application/json' \
+  -d '{"topic": "...", "guidance": "more applied"}'      # article ideas job → poll /jobs/<id>
+curl localhost:8000/projects/<pid>/ideas                 # generated ideas (+ gaps in job result)
+curl -X PATCH localhost:8000/ideas/<idea_id> -H 'content-type: application/json' \
+  -d '{"signal": "like"}'                                # steer future runs (dislike|null too)
+curl -N localhost:8000/ideas/<idea_id>/develop           # streamed proposal blueprint (SSE, cached)
 curl -X DELETE localhost:8000/papers/<paper_id>          # removes PDF+vectors+rows
 ```
 
@@ -76,9 +87,9 @@ LLM spend is logged per call in the `llm_calls` table; a daily token budget
 ## Layout
 
 - `app/` — FastAPI (`main.py`), arq pipeline (`worker.py`), one module per pipeline step
-  (`ingest` → `parse` → `chunks` → `vectors` → `summarize` / `analyze` / `rerank`)
+  (`ingest` → `parse` → `chunks` → `vectors` → `summarize` / `analyze` / `rerank` / `ideate`)
 - `ui/` — Flutter app: `main.dart` (theme/state/projects) + one file per page
 - `tests/`, `eval/` — acceptance tests and retrieval-quality eval
 
 Deliberate shortcuts are marked with `ponytail:` comments in code (OCR fallback,
-Langfuse, Alembic, multi-user auth are stubs/deferred — see doc.md Faz 8).
+Langfuse, Alembic, multi-user auth are stubs/deferred).

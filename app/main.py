@@ -11,9 +11,9 @@ from sqlalchemy import delete, func, select, text
 
 from . import analyze as analysis
 from . import chat as chatmod
-from . import db, ingest, rerank, storage, summarize, vectors
+from . import db, ideate, ingest, rerank, storage, summarize, vectors
 from .config import settings
-from .models import ChatMessage, Chunk, Feedback, Job, Paper, PaperStatus, Project, Summary
+from .models import ChatMessage, Chunk, Feedback, Idea, Job, Paper, PaperStatus, Project, Summary
 
 
 @asynccontextmanager
@@ -154,6 +154,8 @@ async def delete_project(project_id: str):
         p = await _project(s, project_id)
         for paper in (await s.execute(select(Paper).where(Paper.project_id == project_id))).scalars():
             await _delete_paper_row(s, paper)
+        await s.execute(delete(Idea).where(Idea.project_id == project_id))
+        await s.execute(delete(ChatMessage).where(ChatMessage.project_id == project_id))
         await s.delete(p)
         await s.commit()
     return {"ok": True}
@@ -332,7 +334,8 @@ async def get_job(job_id: str):
         if job.result and job.result.get("paper_ids"):
             rows = await s.execute(select(Paper).where(Paper.id.in_(job.result["paper_ids"])))
             papers = [_paper_dict(p) for p in rows.scalars()]
-    return {"id": job.id, "status": job.status, "progress": job.progress, "papers": papers}
+    return {"id": job.id, "status": job.status, "progress": job.progress, "papers": papers,
+            "result": job.result}
 
 
 # ---- Adım 3: filtered / semantic listing -------------------------------------------------
@@ -491,6 +494,98 @@ async def stream_analysis(job_id: str):
         try:
             async for token in analysis.deep_analysis(params["paper_id"], params["topic"]):
                 yield f"data: {json.dumps(token)}\n\n"  # JSON keeps newlines SSE-safe
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {e}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream")
+
+
+# ---- Ideas wizard: topic → gap analysis → grounded article ideas --------------------------
+
+class IdeateRequest(BaseModel):
+    topic: str
+    guidance: str | None = None
+
+
+@app.post("/projects/{project_id}/ideate")
+async def start_ideate(project_id: str, req: IdeateRequest):
+    if not req.topic.strip():
+        raise HTTPException(422, "topic required")
+    async with db.Session() as s:
+        await _project(s, project_id)
+        job = Job(kind="ideate", payload={"project_id": project_id, "topic": req.topic.strip(),
+                                          "guidance": req.guidance})
+        s.add(job)
+        await s.commit()
+        job_id = job.id
+    await app.state.arq.enqueue_job("run_ideate", job_id)
+    return {"job_id": job_id}
+
+
+def _idea_dict(i: Idea) -> dict:
+    return {"id": i.id, "topic": i.topic, "content": i.content, "signal": i.signal,
+            "has_proposal": bool(i.proposal), "created_at": i.created_at.isoformat()}
+
+
+@app.get("/projects/{project_id}/ideas")
+async def list_ideas(project_id: str):
+    async with db.Session() as s:
+        rows = (await s.execute(select(Idea).where(Idea.project_id == project_id)
+                                .order_by(Idea.created_at.desc()))).scalars().all()
+    return {"ideas": [_idea_dict(i) for i in rows]}
+
+
+class IdeaSignalRequest(BaseModel):
+    signal: str | None = None  # like | dislike | null (clear)
+
+
+@app.patch("/ideas/{idea_id}")
+async def patch_idea(idea_id: str, req: IdeaSignalRequest):
+    if req.signal not in ("like", "dislike", None):
+        raise HTTPException(422, "signal must be like|dislike|null")
+    async with db.Session() as s:
+        idea = await s.get(Idea, idea_id)
+        if idea is None:
+            raise HTTPException(404)
+        idea.signal = req.signal
+        await s.commit()
+    return {"ok": True}
+
+
+@app.delete("/ideas/{idea_id}")
+async def delete_idea(idea_id: str):
+    async with db.Session() as s:
+        idea = await s.get(Idea, idea_id)
+        if idea is None:
+            raise HTTPException(404)
+        await s.delete(idea)
+        await s.commit()
+    return {"ok": True}
+
+
+@app.get("/ideas/{idea_id}/develop")
+async def develop_idea(idea_id: str, refresh: bool = False):
+    """Streamed proposal blueprint; cached in Idea.proposal and replayed unless refresh."""
+    async with db.Session() as s:
+        idea = await s.get(Idea, idea_id)
+        if idea is None:
+            raise HTTPException(404)
+        cached = None if refresh else idea.proposal
+
+    async def sse():
+        if cached:
+            yield f"data: {json.dumps(cached)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        acc = ""
+        try:
+            async for token in ideate.develop(idea_id):
+                acc += token
+                yield f"data: {json.dumps(token)}\n\n"
+            async with db.Session() as s:
+                (await s.get(Idea, idea_id)).proposal = acc
+                await s.commit()
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: [ERROR] {e}\n\n"

@@ -3,6 +3,8 @@ The provider is a per-project setting. Token-budget guard + backoff (doc Risk 2)
 every call logged to Postgres (doc §6 observability).
 """
 
+import json
+import re
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -67,14 +69,14 @@ async def _log(model: str, purpose: str, pt: int, ct: int, ms: int) -> None:
 
 
 async def complete(purpose: str, system: str, user: str, model: str | None = None,
-                   provider: str = "ollama") -> str:
+                   provider: str = "ollama", temperature: float = 0.1) -> str:
     await _check_budget()
     model = model or PROVIDERS.get(provider, PROVIDERS["ollama"])["summary_model"]
     t0 = time.monotonic()
     r = await _client(provider).chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.1,
+        temperature=temperature,
     )
     usage = r.usage
     await _log(model, purpose, usage.prompt_tokens if usage else 0,
@@ -84,6 +86,50 @@ async def complete(purpose: str, system: str, user: str, model: str | None = Non
     if "</think>" in text:
         text = text.rsplit("</think>", 1)[-1]
     return text.strip()
+
+
+def extract_json(text: str) -> str | None:
+    """Tolerant JSON lift: prefer a ```json fenced block, else the first balanced {...}/[...]."""
+    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if m:
+        text = m.group(1)
+    start = min((i for i in (text.find("{"), text.find("[")) if i != -1), default=-1)
+    if start == -1:
+        return None
+    close = {"{": "}", "[": "]"}[text[start]]
+    depth, in_str, esc = 0, False, False
+    for i, ch in enumerate(text[start:], start):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == text[start]:
+            depth += 1
+        elif ch == close:
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+async def complete_json(purpose: str, system: str, user: str, provider: str = "ollama",
+                        temperature: float = 0.1) -> dict | list:
+    """complete() + tolerant JSON parse; one retry with a stricter system prompt."""
+    for _ in range(2):
+        text = await complete(purpose, system, user, provider=provider, temperature=temperature)
+        raw = extract_json(text)
+        if raw:
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+        system += "\nReturn ONLY valid JSON, no prose, no markdown fences."
+    raise ValueError(f"{purpose}: model did not return valid JSON")
 
 
 async def stream(purpose: str, system: str, user: str, model: str | None = None,

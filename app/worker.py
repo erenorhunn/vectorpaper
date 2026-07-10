@@ -8,7 +8,7 @@ from arq.connections import RedisSettings
 from sqlalchemy import delete, select
 
 from . import chunks as chunking
-from . import db, ingest, parse, storage, vectors
+from . import db, ideate, ingest, parse, storage, vectors
 from .config import settings
 from .db import Session
 from .models import Chunk, Job, Paper, PaperStatus, VALID_TRANSITIONS
@@ -134,6 +134,15 @@ async def run_ingest(ctx, job_id: str) -> None:
         await _progress(job_id, str(e)[:500], "failed")
 
 
+async def run_ideate(ctx, job_id: str) -> None:
+    """Ideas wizard: MAP per-paper notes → gap synthesis → idea generation."""
+    try:
+        await ideate.run_pipeline(job_id, progress=_progress)
+    except Exception as e:
+        log.exception("job %s failed", job_id)
+        await _progress(job_id, str(e)[:500], "failed")
+
+
 async def startup(ctx) -> None:
     await db.init_db()
     storage.ensure_bucket()
@@ -141,7 +150,7 @@ async def startup(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [run_ingest]
+    functions = [run_ingest, run_ideate]
     on_startup = startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     job_timeout = 3600

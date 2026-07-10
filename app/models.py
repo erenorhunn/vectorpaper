@@ -107,6 +107,22 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Idea(Base):
+    """One generated article idea (Ideas wizard). `content` is the structured idea JSON;
+    `proposal` caches the developed blueprint text."""
+
+    __tablename__ = "ideas"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    topic: Mapped[str] = mapped_column(Text)
+    content: Mapped[dict] = mapped_column(JSON)  # {title, research_question, novelty, method_sketch,
+    #                                               required_resources, risks, grounded_in: [{paper_id, title}]}
+    signal: Mapped[str | None] = mapped_column(String(16))  # like | dislike | NULL
+    proposal: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class ChatMessage(Base):
     """Persistent library-settings chat. `paper_ids` holds the @-tagged papers on a user turn."""
 
