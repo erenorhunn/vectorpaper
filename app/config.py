@@ -22,12 +22,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-5"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3-flash-preview"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4.1-mini"
 
     openalex_mailto: str = ""  # optional email for OpenAlex's faster "polite pool"
     search_max_results: int = 10
-    prefilter_min_year: int = 0
-    prefilter_min_citations: int = 0
+    discover_pool_factor: int = 3  # per-source fetch multiplier feeding the discover rerank
+    discover_min_rerank_score: float = 0.0  # 0 = reorder only; raise (e.g. 0.3) to drop junk
 
     daily_token_budget: int = 2_000_000
 

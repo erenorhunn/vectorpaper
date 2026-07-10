@@ -45,7 +45,7 @@ class Project(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(Text)
-    settings: Mapped[dict] = mapped_column(JSON, default=dict)  # {"provider": "ollama|claude|gemini"}
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)  # {"provider": "ollama|claude|gemini|openai"}
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

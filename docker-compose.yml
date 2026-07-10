@@ -72,6 +72,10 @@ services:
       # cloud LLM keys — compose reads ./.env automatically (see .env.example)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3-flash-preview}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}

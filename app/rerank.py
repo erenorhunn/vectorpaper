@@ -49,7 +49,7 @@ async def rerank(query: str, results: list[dict], project_id: str | None = None,
     ranker = _get_ranker()
     req = RerankRequest(query=q, passages=[{"id": i, "text": r[text_key]} for i, r in enumerate(results)])
     ranked = await asyncio.to_thread(ranker.rerank, req)
-    return [results[item["id"]] for item in ranked]
+    return [results[item["id"]] | {"rerank_score": float(item["score"])} for item in ranked]
 
 
 def parse_query_lines(text: str) -> list[str]:

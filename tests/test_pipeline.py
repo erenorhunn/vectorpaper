@@ -107,6 +107,16 @@ def test_merge_candidates_dedup():
     assert titles == ["Paper A", "Paper B", "  paper b ", "Paper C"]
 
 
+def test_arxiv_query_field_targeting():
+    from app.ingest import _arxiv_query
+
+    assert _arxiv_query("graph neural networks") == \
+        'ti:"graph neural networks" OR abs:"graph neural networks" OR abs:(graph neural networks)'
+    # characters that would break the Lucene parser get stripped
+    assert '"rag"' not in _arxiv_query('so-called "RAG" (2024): survey')
+    assert _arxiv_query('a "b" (c):') == 'ti:"a b c" OR abs:"a b c" OR abs:(a b c)'
+
+
 def test_parse_query_lines():
     from app.rerank import parse_query_lines
 

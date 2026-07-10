@@ -25,7 +25,14 @@ PROVIDERS = {
     "gemini": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
                "api_key": settings.gemini_api_key,
                "summary_model": settings.gemini_model, "reasoning_model": settings.gemini_model},
+    "openai": {"base_url": "https://api.openai.com/v1/", "api_key": settings.openai_api_key,
+               "summary_model": settings.openai_model, "reasoning_model": settings.openai_model},
 }
+
+
+def _sampling(model: str, temperature: float) -> dict:
+    # ponytail: gpt-5* reasoning models reject non-default temperature — omit it there
+    return {} if model.startswith("gpt-5") else {"temperature": temperature}
 
 _clients: dict[str, AsyncOpenAI] = {}
 
@@ -76,7 +83,7 @@ async def complete(purpose: str, system: str, user: str, model: str | None = Non
     r = await _client(provider).chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=temperature,
+        **_sampling(model, temperature),
     )
     usage = r.usage
     await _log(model, purpose, usage.prompt_tokens if usage else 0,
@@ -142,8 +149,8 @@ async def stream(purpose: str, system: str, user: str, model: str | None = None,
     resp = await _client(provider).chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.2,
         stream=True,
+        **_sampling(model, 0.2),
     )
     async for chunk in resp:
         delta = chunk.choices[0].delta.content if chunk.choices else None

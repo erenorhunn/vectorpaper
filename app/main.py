@@ -73,6 +73,8 @@ async def providers():
          "model": settings.claude_model},
         {"id": "gemini", "label": "Gemini", "available": bool(settings.gemini_api_key),
          "model": settings.gemini_model},
+        {"id": "openai", "label": "ChatGPT", "available": bool(settings.openai_api_key),
+         "model": settings.openai_model},
     ]}
 
 
@@ -183,7 +185,10 @@ class HelpRequest(BaseModel):
 async def search_help(project_id: str, req: HelpRequest):
     if not req.topic.strip():
         raise HTTPException(422, "topic required")
-    queries = await rerank.suggest_queries(req.topic, project_id, await _provider(project_id))
+    try:
+        queries = await rerank.suggest_queries(req.topic, project_id, await _provider(project_id))
+    except Exception as e:  # LLM/upstream down → legible 502, not raw 500
+        raise HTTPException(502, f"query suggestion failed: {e}")
     return {"queries": queries}
 
 
@@ -208,17 +213,32 @@ async def discover(project_id: str, req: DiscoverRequest):
         await _project(s, project_id)
 
     per_query = max(1, DISCOVER_PAGE // 3)  # each query gets a full share; more queries → more results, not fewer
+    pool_per_query = per_query * settings.discover_pool_factor  # oversampled pool for the reranker to pick from
     arxiv_lists, s2_lists, oa_lists = [], [], []
     for q in queries:
-        arxiv_lists.append(await ingest.search_arxiv(q, per_query, start=req.page * per_query))
-        s2_lists.append(await ingest.search_s2(q, per_query, offset=req.page * per_query))
-        oa_lists.append(await ingest.search_openalex(q, per_query, page=req.page))
+        arxiv_lists.append(await ingest.search_arxiv(q, pool_per_query, start=req.page * pool_per_query))
+        s2_lists.append(await ingest.search_s2(q, pool_per_query, offset=req.page * pool_per_query))
+        oa_lists.append(await ingest.search_openalex(q, pool_per_query, page=req.page))
     candidates = ingest.merge_candidates(*arxiv_lists, *s2_lists, *oa_lists)
     await ingest.enrich_s2(candidates)
     if req.year_min:
         candidates = [c for c in candidates if (c.get("year") or 0) >= req.year_min]
     if req.min_citations:
         candidates = [c for c in candidates if (c.get("citation_count") or 0) >= req.min_citations]
+
+    # semantic rerank of the pool against the query — external APIs return keyword matches,
+    # the cross-encoder decides which ones are actually about the topic
+    for c in candidates:
+        c["_rr"] = f"{c['title']}. {c.get('abstract') or ''}"
+    try:
+        ranked = await rerank.rerank("; ".join(queries), candidates, project_id, text_key="_rr")
+        candidates = [c for c in ranked
+                      if c.pop("rerank_score", 1.0) >= settings.discover_min_rerank_score]
+    except Exception:
+        pass  # ponytail: rerank is best-effort; overlap order is the fallback
+    candidates = candidates[:DISCOVER_PAGE]
+    for c in candidates:
+        c.pop("_rr", None)  # helper key must not reach Paper(**e)
 
     out = []
     async with db.Session() as s:

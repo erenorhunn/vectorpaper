@@ -25,10 +25,18 @@ _ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([\w.]+?)(?:v\d+)?(?:\.pdf)?
 ARXIV_DELAY = 3.0
 
 
+def _arxiv_query(keywords: str) -> str:
+    """Field-targeted Lucene query: `all:` also matches author names/comments/journal refs,
+    which is where most irrelevant hits came from. Quoted ti:/abs: phrases rank exact matches
+    first; the unquoted abs:(...) clause keeps recall for multi-concept queries."""
+    q = " ".join(re.sub(r'["():]', " ", keywords).split())
+    return f'ti:"{q}" OR abs:"{q}" OR abs:({q})'
+
+
 async def search_arxiv(keywords: str, max_results: int | None = None, start: int = 0) -> list[dict]:
     """Query the arXiv Atom API → list of paper metadata dicts."""
     params = {
-        "search_query": f"all:{keywords}",
+        "search_query": _arxiv_query(keywords),
         "start": start,
         "max_results": max_results or settings.search_max_results,
         "sortBy": "relevance",
@@ -204,16 +212,6 @@ async def enrich_s2(entries: list[dict]) -> None:
                 entry["doi"] = entry["doi"] or (s2.get("externalIds") or {}).get("DOI")
     except Exception:
         pass  # ponytail: enrichment is best-effort; add retry/API-key when S2 matters
-
-
-def prefilter(entries: list[dict]) -> list[dict]:
-    """Cheap decision before the expensive download (doc: Kalite Ön-Filtresi)."""
-    return [
-        e
-        for e in entries
-        if (e["year"] or 0) >= settings.prefilter_min_year
-        and e["citation_count"] >= settings.prefilter_min_citations
-    ]
 
 
 async def download_pdf(arxiv_id: str | None, pdf_url: str | None = None) -> tuple[bytes, str]:
